@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DRAM / HBM 周期研究框架（2026-09-27）</title>
+<style>
+.viz-root {
+  color-scheme: light;
+  --surface-1: #fcfcfb; --page: #f9f9f7;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --series-1: #2a78d6;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a;
+  --tint: #f0efec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --surface-1: #1a1a19; --page: #0d0d0d;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --tint: #383835;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); }
+.viz-root { font-family: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif;
+  color: var(--text-primary); background: var(--page); line-height: 1.75; font-size: 15.5px; }
+main { max-width: 1080px; margin: 0 auto; padding: 40px 28px 80px; }
+h1 { font-size: 30px; line-height: 1.3; margin: 6px 0 8px; }
+.part { margin: 72px 0 0; padding-top: 16px; border-top: 2px solid var(--axis); color: var(--text-muted); font-size: 13px; letter-spacing: .1em; }
+h2 { font-size: 22px; margin: 44px 0 10px; }
+.part + h2 { margin-top: 6px; }
+h3 { font-size: 17px; margin: 28px 0 8px; }
+p { margin: 8px 0; }
+.kicker { color: var(--text-muted); font-size: 13px; letter-spacing: .04em; }
+.lede { color: var(--text-secondary); font-size: 16.5px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 18px 22px; margin: 16px 0; }
+.tldr li { margin: 8px 0; }
+.chain { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0; }
+.chain div { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.chain b { display: block; font-size: 15px; margin-bottom: 4px; }
+.chain span { color: var(--text-secondary); font-size: 13.5px; }
+figure { margin: 18px 0; }
+figure img { width: 100%; border-radius: 10px; border: 1px solid var(--border); display: block; }
+figcaption { color: var(--text-muted); font-size: 13px; margin-top: 6px; }
+table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; background: var(--surface-1); border-radius: 10px; overflow: hidden; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--text-secondary); font-weight: 600; background: var(--tint); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.st { white-space: nowrap; font-weight: 600; }
+.st i { font-style: normal; margin-right: 4px; }
+.st-good i { color: var(--good); } .st-warn i { color: var(--warning); } .st-hit i { color: var(--serious); } .st-na i { color: var(--text-muted); }
+.formula { font-family: ui-monospace, "SF Mono", Menlo, monospace; background: var(--tint); border-radius: 8px; padding: 10px 14px; font-size: 14px; overflow-x: auto; white-space: pre; }
+.note { color: var(--text-secondary); font-size: 14px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 760px) { .chain, .two { grid-template-columns: 1fr; } }
+a { color: var(--series-1); }
+.nw1 td:first-child, .nw1 th:first-child { white-space: nowrap; }
+.src li { font-size: 13px; color: var(--text-secondary); margin: 3px 0; word-break: break-all; }
+</style>
+</head>
+<body class="viz-root">
+<main>
+<div class="kicker">研究框架 · 数据截至 2026-09-25（美股收盘）/ 2026-09-24（TrendForce 现货）· 不构成投资建议</div>
+<h1>DRAM / HBM 周期研究：怎么追踪、怎么量化、现在在哪里、接下来怎么走</h1>
+<p class="lede">本文分四部分：先讲清楚内存股在给什么定价、该看哪些指标；再用美光（MU）过去三轮周期总结顶部和底部的规律；然后给出 2026 年 9 月的读数；最后给出三条可能的路径、各自的触发信号和跟踪清单。</p>
+
+<div class="card tldr">
+<h3 style="margin-top:4px">一页结论</h3>
+<ol>
+<li><b>股价交易的是盈利预期的修正方向，不是价格水平，也不是已经公布的 EPS。</b>指标之间有明确的先后：
+  <ul>
+    <li>合约价的涨速（二阶）领先。</li>
+    <li>现货是预警。</li>
+    <li>"现货跌破合约价"确认价格见顶。</li>
+    <li>合约价水平和已公布的 EPS 都滞后于股价。</li>
+  </ul></li>
+<li><b>历史上股价稳定领先合约价水平见顶 2~5 个月，领先季度 EPS 峰值 3~5 个月。</b>每次股价见顶时 EPS 都还在涨。周期顶需要两个条件同时出现：价格涨速见顶，加上盈利预期不再上调。</li>
+<li><b>顶部是什么形态，取决于"涨速见顶"和"价格水平见顶"之间隔多久。</b>
+  <ul>
+    <li>隔 1~2 个季度（2021、2024 年）：出现单顶，或者只有一次微弱的二顶。</li>
+    <li>隔约 6 个季度（2016–18 年）：股价中途多次回调、多次创新高，周期被拉长。</li>
+  </ul></li>
+<li><b>现在：第一个条件已经出现，第二个在松动但还没出现。</b>
+  <ul>
+    <li>合约价环比涨速在 1Q26 见顶，同比涨速在 3Q26 见顶；二阶是 −45pp。</li>
+    <li>卖方上调盈利预测的比例从 92% 降到 77%，但整体仍在上调。</li>
+    <li>MU 6/25 见顶后跌了 39%，按波动率调整后只相当于 2016–18 年那种中途回调。</li>
+    <li>现货到 9/24 还在创新高，约为合约价的 1.8 倍。这是历史上股价和现货最大的一次错位。</li>
+  </ul></li>
+<li><b>产能决定时间表。</b>新厂 2H27 才开始爬坡，2028 年才有实质产出。所以基准情形是：现货在 4Q26~1Q27 见顶，2Q~3Q27 跌破合约价，合约价水平在 2H27 见顶。这比摩根士丹利预计的 4Q26 更晚。</li>
+<li><b>三条路径（主观权重）：</b>拉长型多顶约 45%，简单双顶约 30%，单顶约 25%。
+  <ul>
+    <li>最关键的分水岭是 <b>9/30 美光财报之后一致预期往哪个方向改</b>。</li>
+    <li>其次是 4Q26 合约价环比与 +15.5% 的比较、DDR5 现货是否见顶、SK 海力士和三星能否收复 6 月高点。</li>
+  </ul></li>
+</ol>
+</div>
+
+<!-- ============ 第一部分 ============ -->
+<div class="part">第一部分 · 方法</div>
+<h2>1. 股价在定价什么</h2>
+<div class="chain">
+  <div><b>① 价格</b><span>现货、合约价、HBM 年度合约、原厂实际售价，四层价格各有分工</span></div>
+  <div><b>② 供需</b><span>bit 需求和 bit 供给，HBM 对晶圆的挤占，库存，新厂时间表</span></div>
+  <div><b>③ 盈利</b><span>营收 = 出货 bit × 售价；毛利率很高时，利润几乎随售价同比例变动</span></div>
+  <div><b>④ 估值</b><span>周期股按"正常化盈利"定价；峰值盈利时市盈率最低</span></div>
+</div>
+<p>整条链最后只落到一个问题上：<b>未来几个季度，市场对盈利的预期会被上调还是下调。</b>下面这张表把常用指标按"领先还是滞后"排好：</p>
+<table>
+<tr><th>指标</th><th>和股价顶的时间关系</th><th>用法和可靠性</th></tr>
+<tr><td><b>EPS 一致预期的修正方向</b>（未来 12 个月 EPS、上调比例）</td><td>同步到略领先，是股价直接交易的对象</td><td>最核心。完整数据需要 FactSet 或 Bloomberg，公开的替代指标是卖方上调比例、指引相对一致预期的差距</td></tr>
+<tr><td><b>合约价的涨速</b>（环比、二阶，TrendForce 预测是上调还是下调）</td><td>领先股价 0~1 个季度，也领先盈利修正</td><td>最好的领先指标。历次股价见顶前二阶都已转负，是<b>必要条件</b>；但 2017 年二阶转负一年后股价才见顶，所以<b>不充分</b></td></tr>
+<tr><td>现货价（DDR5 为主）</td><td>和股价基本同步，前后差 1~5 个月；领先合约价 1~2 个季度</td><td>预警。噪音大、市场薄，本轮 4 月出过一次假信号</td></tr>
+<tr><td>现货跌破合约价</td><td>之后 1~2 个季度合约价转跌（3 轮都是）</td><td>确认"价格见顶"几乎够用，但对股价来说太晚</td></tr>
+<tr><td>合约价水平</td><td>滞后股价 2~5 个月</td><td>只能用来确认</td></tr>
+<tr><td>已公布的 EPS</td><td>滞后股价 3~5 个月</td><td>只能用来确认，而且最容易误导：每次股价见顶时它都还在创新高</td></tr>
+</table>
+<p class="note"><b>判断周期顶的两个条件：</b></p>
+<ul class="note">
+<li>条件一：价格涨速见顶，也就是合约价二阶在水下，或者同比涨速已经见顶。</li>
+<li>条件二：盈利预期不再上调，也就是一致预期停止上调，或者上调比例转为净下调。</li>
+</ul>
+<p class="note">两个条件同时出现时，就是周期顶。2017 年只出现了条件一，盈利预期还在大幅上调，所以股价又涨了一年。这是本文的核心判断框架。需要说明，它是根据价格和股价的历史推出来的，还没有用一致预期的历史快照做过检验（见第 13 节）。</p>
+
+<h2>2. 追踪哪些价格</h2>
+<table>
+<tr><th>层级</th><th>价格</th><th>频率 / 来源</th><th>代表什么</th></tr>
+<tr><td>L1 现货</td><td>DDR5 16Gb、DDR4 8Gb 颗粒</td><td>每日、每周；TrendForce 现货页免费，每周三出周报</td><td>边际买盘的情绪，最快，但成交量小</td></tr>
+<tr><td>L2 合约</td><td>PC、服务器、手机 DRAM 合约价</td><td>PC 按月，其余按季；TrendForce 公布季度预测，明细要付费</td><td>原厂营收的主体。服务器 DRAM 最接近 MU 的产品结构</td></tr>
+<tr><td>L3 HBM</td><td>HBM3E、HBM4，按每 Gb 或每颗计价</td><td>年度合约；季度 ASP 数据要付费，其余靠媒体报道</td><td>AI 需求的核心；按年定价，所以价格反应比常规 DRAM 慢</td></tr>
+<tr><td>L4 实现价</td><td>原厂实际卖出的每 bit 售价</td><td>季度财报；韩国出口单价每 10 天一次，可作高频替代</td><td>最终落到利润上的价格，包含产品结构变化</td></tr>
+</table>
+<p class="note"><b>不要拿 DDR4 当主指标。</b>DDR4 正在停产，它的溢价主要来自停产前的抢货，不代表 MU 以 DDR5 和 HBM 为主的收入。现货看 DDR5，合约看服务器 DRAM，再加上 HBM 的分代价格。</p>
+
+<h2>3. 量化工具</h2>
+<h3>3.1 价格的三个导数和周期时钟</h3>
+<p>把价格拆成三层：<b>水平</b>（贵不贵）、<b>一阶</b>（环比涨多少）、<b>二阶</b>（环比的变化，也就是涨速在加快还是放缓）。二阶决定了盈利预期往哪个方向修正，所以股价对它最敏感。</p>
+<figure><img src="framework_2_three_derivatives.png" alt="常规 DRAM 季度合约价环比与 MU 当季涨跌"><figcaption>图 1｜常规 DRAM 季度合约价环比（TrendForce 区间中值）和 MU 同季度股价表现。浅色柱是预测值，不是结算值。</figcaption></figure>
+<figure><img src="framework_5_cycle_clock.png" alt="内存周期时钟"><figcaption>图 2｜周期时钟：横轴是一阶，纵轴是二阶，价格按顺时针方向转：复苏（左上）→ 主升（右上）→ 见顶区（右下）→ 下行（左下）。2023 年以来转完一整圈，2025 年底开始第二圈。</figcaption></figure>
+<table>
+<tr><th>象限（1Q23–3Q26）</th><th class="num">季度数</th><th class="num">MU 当季中位数</th><th class="num">上涨次数</th><th>包含的季度</th></tr>
+<tr><td>下跌 · 收窄（复苏）</td><td class="num">3</td><td class="num">+8%</td><td class="num">3/3</td><td>2Q23、3Q23、2Q25</td></tr>
+<tr><td>上涨 · 加快（主升）</td><td class="num">4</td><td class="num">+31%</td><td class="num">4/4</td><td>4Q23、3Q25、4Q25、1Q26</td></tr>
+<tr><td>上涨 · 持平</td><td class="num">2</td><td class="num">+25%</td><td class="num">2/2</td><td>1Q24、2Q24</td></tr>
+<tr><td><b>上涨 · 放缓（见顶区）</b></td><td class="num">4</td><td class="num"><b>−12%</b></td><td class="num">1/4</td><td>3Q24 −21%、4Q24 −19%、<b>2Q26 +242%</b>、3Q26 −6%</td></tr>
+<tr><td>下跌 · 加快（下行）</td><td class="num">1</td><td class="num">+3%</td><td class="num">1/1</td><td>1Q25（受关税冲击干扰）</td></tr>
+</table>
+<p class="note">样本只有 15 个季度，多数用的是预测值，只能看方向。2Q26 是唯一的大例外：TrendForce 在 3/31 就预测当季涨速会放缓，但美光盈利大幅超预期，6/24 的指引比一致预期高约 14.7%，同时签下了长期协议，MU 当季涨了 242%。<b>这再次说明，驱动股价的是盈利修正；二阶只是替代指标。</b>另外，环比从 +95% 回落，二阶在数字上天然会很深。所以要用同比做交叉检验，见第 7 节。</p>
+
+<h3>3.2 现货：动量比价差更有用</h3>
+<figure><img src="framework_3_spot_momentum.png" alt="DDR4 现货水平、合约价与动量"><figcaption>图 3｜TrendForce 公开周报里的 45 个 DDR4 现货报价点。下图把每段报价间隔的涨跌折算成每周涨跌，再取约 4 周的平均。</figcaption></figure>
+<ul class="note">
+<li><b>价差</b>（现货 ÷ 合约 − 1）：现货跌破合约价，是历史上最可靠的"价格见顶"确认信号。但本轮 DDR4 被停产扭曲，合约价又被长期协议压住，所以价差水平本身的信息量下降了。</li>
+<li><b>动量</b>：现货涨速放缓领先合约价涨速放缓；现货连续转跌领先合约价转跌。本轮更好的预警是<b>DDR5 现货连续 3~4 周下跌</b>，以及周报措辞从"原厂报价坚挺"变成"原厂降价、经销商抛货"。</li>
+</ul>
+
+<h3>3.3 供需平衡</h3>
+<div class="formula">供需缺口 ≈ 需求 bit 增速 − 供给 bit 增速
+供给 bit ≈ 可用晶圆 × 每片晶圆的 bit 产出 − HBM 挤占（同样容量，HBM 约耗用 DDR5 的 3 倍晶圆，而且每一代都在扩大）
+短期内供给和需求几乎都不随价格变化，所以缺口变 1 个百分点，价格往往要变好几个百分点</div>
+
+<h3>3.4 盈利桥</h3>
+<div class="formula">营收 = 出货 bit × 每 bit 售价（ASP）
+毛利 = 营收 − 出货 bit × 每 bit 成本            （MU FQ4 指引毛利率约 86%）
+EPS  ≈ （毛利 − 费用） × （1 − 税率） ÷ 股本</div>
+<table>
+<tr><th>情形（以 MU FQ4 指引为基准）</th><th class="num">影响</th><th>说明</th></tr>
+<tr><td>DRAM 售价 ±10%</td><td class="num">EPS 每季 ±$2.9（约 ±9%）</td><td>按 DRAM 季营收 $383 亿（Zacks 预估）、税率 15%（假设）、股本约 11.3 亿股估算，单位成本不变</td></tr>
+<tr><td>售价 −10% 时</td><td class="num">毛利率 86% → 约 84.4%</td><td>毛利额 −11.6%。毛利率已经很高，利润的变动幅度和营收差不多</td></tr>
+<tr><td>价格持平，出货 bit +15~20%</td><td class="num">EPS 仍增长约 15~20%</td><td>所以市场真正怕的不是价格不涨，而是价格下跌</td></tr>
+</table>
+<p class="note">目前的增长几乎全部来自涨价：MU FQ3 的 DRAM 售价环比 +60% 出头，出货 bit 只涨了低个位数。一旦价格转跌，EPS 会立刻跟着往下走，没有出货增长来缓冲。</p>
+
+<h3>3.5 估值：反推股价隐含了多大的盈利回落</h3>
+<p>周期顶部利润最高、市盈率最低，历史上 MU 在顶部只值 3~8 倍峰值盈利。所以不要直接看市盈率，而是反过来算：假设一个"正常化"市盈率，看当前股价隐含了多大的盈利回落。</p>
+<table>
+<tr><th class="num">假设的正常化市盈率</th><th class="num">$1,082 隐含的正常化 EPS</th><th class="num">相对 FQ4 年化 EPS $124</th></tr>
+<tr><td class="num">10×</td><td class="num">$108</td><td class="num">−13%</td></tr>
+<tr><td class="num">12×</td><td class="num">$90</td><td class="num">−27%</td></tr>
+<tr><td class="num">15×</td><td class="num">$72</td><td class="num">−42%</td></tr>
+<tr><td class="num">18×</td><td class="num">$60</td><td class="num">−52%</td></tr>
+</table>
+<p class="note">当前估值（stockanalysis，9/27）：
+MU 市值约 $1.22 万亿，前瞻市盈率 7.4 倍，对应前瞻 EPS 约 $146；市净率 12.1 倍，历史顶部只有 2.2~2.5 倍。SK 海力士和三星的前瞻市盈率约 4.6 倍。
+如果 MU 的正常化市盈率在 12~15 倍，现在的股价相当于押注"跨周期平均盈利比当前低 27~42%"。过去三轮的实际回落远大于此，这是看空方的依据。看多方认为，长期协议加上 HBM 会让这次回落更浅。
+另外，这一轮的盈利远高于账面价值，市净率这把尺子可能不再适用。</p>
+
+<!-- ============ 第二部分 ============ -->
+<div class="part">第二部分 · 历史规律（MU，2016–2025）</div>
+<h2>4. 顶部</h2>
+<figure><img src="framework_1_cycle_roadmap.png" alt="MU 股价与内存合约价周期拐点"><figcaption>图 4｜MU 日收盘价（复权，对数坐标）。橙色区间 = 合约价涨速见顶 → 价格水平见顶，青线 = 合约价见底。</figcaption></figure>
+<h3>4.1 拐点的先后顺序</h3>
+<table>
+<tr><th>周期</th><th>涨速见顶</th><th>现货见顶</th><th>股价见顶</th><th>现货跌破合约</th><th>合约价见顶</th><th>季度 EPS 峰值</th><th class="num">股价顶到底</th></tr>
+<tr><td>2016–18</td><td>2017Q1（资料少）</td><td>约 2018 年初</td><td>2018-03-20、05-29</td><td>2018 年 6 月底</td><td>2018Q3</td><td>截至 2018 年 8 月的那一季</td><td class="num">−54%</td></tr>
+<tr><td>2020–22</td><td>2021Q2</td><td>2021-05-20（PC 模组）</td><td>2021-04-12；二顶 2022-01-14</td><td>2021 年 8 月初</td><td>2021Q3</td><td>截至 2021 年 9 月、2022 年 6 月的两季</td><td class="num">−48%</td></tr>
+<tr><td>2024–25</td><td>2024Q1–Q2</td><td>没有明确高点</td><td>2024-06-18</td><td>上半年起现货已低于合约</td><td>2024Q3</td><td>截至 2024 年 11 月的那一季</td><td class="num">−57%</td></tr>
+<tr><td><b>2026–</b></td><td><b>1Q26（环比）、3Q26（同比）</b></td><td><b>尚未见顶</b></td><td><b>2026-06-25（阶段高点）</b></td><td><b>尚未发生</b></td><td><b>尚未见顶</b></td><td><b>一致预期在 FY2028</b></td><td class="num"><b>−39%（阶段）</b></td></tr>
+</table>
+<table>
+<tr><th>股价领先于</th><th>历史规律</th><th>本轮</th></tr>
+<tr><td>合约价水平见顶</td><td><b>稳定领先 2~5 个月</b></td><td>合约价还没见顶，6/25 已经领先 3 个月以上</td></tr>
+<tr><td>季度 EPS 峰值</td><td><b>领先 3~5 个月</b></td><td>如果 EPS 在 FY2028 见顶，按规律最终顶在 2027 年</td></tr>
+<tr><td>现货见顶</td><td>不稳定：2018 年现货早 2~5 个月，2021 年股价早约 1 个月，2024 年基本同时</td><td><b>现货还在创新高，股价已经领先 3 个月以上，是历史上最大的错位</b></td></tr>
+<tr><td>涨速见顶</td><td>同一季度或下一季度；2016–18 年例外，股价晚了 13~15 个月</td><td>下一季度</td></tr>
+</table>
+
+<h3>4.2 股价见顶时，EPS 都还在涨</h3>
+<table>
+<tr><th>股价顶</th><th>当时的 EPS</th><th>之后的 EPS</th><th>之后的股价</th></tr>
+<tr><td>2018-05-29</td><td>还在涨（FQ3'18 非 GAAP 约 $3.15）</td><td>再涨一季到约 $3.53，然后回落</td><td>−54%</td></tr>
+<tr><td>2021-04-12</td><td>季度 EPS 不到 $1</td><td>两个季度后涨到 $2.40</td><td>先 −30%，二顶后再 −45%</td></tr>
+<tr><td>2024-06-18</td><td>最近一季 $0.30</td><td>涨到 $1.67（涨了 5 倍多），回落 16% 后 2025 年 5 月又创新高</td><td><b>EPS 在涨，股价跌了 58%</b></td></tr>
+<tr><td><b>2026-06-25</b></td><td><b>$24.67，FQ4 指引约 $31</b></td><td>一致预期在 FY2028 见顶</td><td>—</td></tr>
+</table>
+<p class="note">2021 年和 2024 年为 GAAP 稀释 EPS（stockanalysis 季度数据）；2018 年为非 GAAP，凭已有知识引用，没有复核。<b>"EPS 还没见顶"是股价见顶时的常态，不能作为"还没见顶"的理由。</b>本轮真正可能不同的地方是 EPS 预期的峰值离得很远。</p>
+
+<h3>4.3 三种顶部形态，由"涨速见顶到价格见顶隔多久"决定</h3>
+<figure><img src="framework_6_double_top.png" alt="四轮首顶对齐对比"><figcaption>图 5｜以每轮首顶 = 100 对齐，横轴是距首顶的交易日。</figcaption></figure>
+<figure><img src="framework_7_top2_second_derivative.png" alt="历史双顶与本轮的二阶导对比"><figcaption>图 6｜三轮的二阶导，灰底为股价见顶所在的季度。三个面板的纵轴刻度不同。</figcaption></figure>
+<table>
+<tr><th></th><th>2016–18 延长型</th><th>2020–22 双顶</th><th>2024 单顶</th><th>本轮</th></tr>
+<tr><td><b>涨速见顶到价格见顶</b></td><td><b>约 6 个季度</b></td><td>约 1 个季度</td><td>1~2 个季度</td><td>1Q26 → 基准 2H27，约 5~6 个季度（推测）</td></tr>
+<tr><td>首次大回撤</td><td class="num">−21%、−25%</td><td class="num">−30%</td><td class="num">−43%</td><td class="num">−39%</td></tr>
+<tr><td>回撤 ÷ 顶前波动率</td><td class="num">0.63、0.62</td><td class="num">0.83</td><td class="num">1.34</td><td class="num"><b>0.56</b></td></tr>
+<tr><td>回撤之后</td><td>两次创新高，幅度 +23%、+2%</td><td>+2% 的微弱新高</td><td>三次反弹都停在前高下方 26~29%</td><td>已收复约 75%，比高点低 11%</td></tr>
+<tr><td>最终顶时的二阶</td><td>水下变浅（−5.5 → −1.5pp）</td><td>水下变浅（−11 → −5pp），一阶已转负</td><td>从 0 转负</td><td>还在变深（−35 → −45pp）</td></tr>
+<tr><td>现货和合约</td><td>最终顶 1 个月后跌破</td><td>首顶 4 个月后跌破</td><td>见顶前已低于合约</td><td>现货约为合约的 1.8 倍</td></tr>
+</table>
+<p class="note"><b>规律：</b></p>
+<ul class="note">
+<li><b>涨速见顶和价格见顶隔得越久，顶部越宽。</b>
+  <ul>
+    <li>2016–18 年供给受限，价格在涨速见顶后又涨了 6 个季度。股价中途两次回调 20~25%，每次创新高的幅度越来越小，最终顶在价格见顶前 3 个月。</li>
+    <li>2021 年和 2024 年两者只隔 1~2 个季度，所以是单顶，或者只有一次微弱的二顶。</li>
+  </ul></li>
+<li><b>历史上的二顶都出现在"二阶在水下、但开始变浅"的季度。</b>市场把"放缓在缓和"当成了好转。</li>
+<li><b>本轮的回撤要按波动率调整后再比。</b>MU 顶前的年化波动率是 88%，大约是历史的两倍。调整后，−39% 只相当于 2016–18 年的中途回调，和今年 3 月加速期的那次回调（0.54）也差不多，远小于真正的周期顶（0.83、1.34）。</li>
+</ul>
+
+<h2>5. 底部</h2>
+<table>
+<tr><th></th><th>2018-12-24（复权 $28.30）</th><th>2022-09-26（复权 $47.94）</th><th>2025-04-04（复权 $64.56，补充）</th></tr>
+<tr><td>合约价</td><td>4Q18 约 −8%；12/4 预测 1Q19 跌得更深（后来接近 −20%）</td><td>3Q22 −10~15%；9/22 刚把 4Q22 预测扩大到 −13~18%</td><td>1Q25 −8~13%；2Q25 预测 −0~5% 且在上调</td></tr>
+<tr><td>二阶</td><td>约 −9.5pp，还在变深</td><td>约 −10pp，下一季开始变浅</td><td>约 +8pp，已回到水上</td></tr>
+<tr><td>供给端</td><td>12/18 美光砍 FY19 资本开支（$105 亿 → $90~95 亿），三星、SK 海力士跟进；2019 年 3 月再减产约 5%</td><td>9/29 FY23 资本开支减 30% 以上，设备支出减 50%；11/16 投片减约 20%，2023 年 DRAM bit 供给负增长</td><td>关税冲击，不是供给驱动</td></tr>
+<tr><td>指引和股价反应</td><td>EPS 指引比一致预期低约 27%；次日 −8%，4 个交易日后见底</td><td>营收指引从 $66 亿骤降到 $42.5 亿；次日 +0.2%，利空不再跌</td><td>3/20 财报次日 −8%，随后碰上关税冲击</td></tr>
+<tr><td>大盘</td><td>MU、费城半导体、标普<b>同一天</b>见底</td><td>MU 比大盘早约 2.5 周见底</td><td>MU 比大盘早 2 个交易日见底</td></tr>
+<tr><td>二次探底</td><td>2019-06，比首次低点高 12%</td><td>2022-12，只高 0.7%，几乎是完全的双底</td><td>—</td></tr>
+<tr><td>二阶转正 / 合约价见底</td><td>约 3 个季度后 / 约 12 个月后</td><td>约 3 个季度后 / 约 11 个月后</td><td>当季 / 基本同时</td></tr>
+</table>
+<p class="note"><b>底部的共同点：</b></p>
+<ul class="note">
+<li>股价在价格跌得最凶、预测还在下调的时候见底。</li>
+<li>触发点是龙头砍资本开支、减投片，也就是供给开始投降。</li>
+<li>盈利指引一次性下调到位，同时大盘出现恐慌性底部。</li>
+<li>底部比顶部好识别，因为"砍资本开支"是一个明确的领先信号。顶部没有对称的信号：涨价时原厂只会加码扩产。</li>
+</ul>
+
+<h2>6. 现货回落有多快</h2>
+<table>
+<tr><th></th><th>现货见顶</th><th>跌破合约</th><th class="num">用时</th><th>之后</th><th>驱动</th></tr>
+<tr><td>2018</td><td>约年初</td><td>6 月底</td><td class="num">5~6 个月</td><td>9 月底已比合约低 10%；4Q18 合约价转跌</td><td>原厂库存上升，供货满足率从 90% 升到 120%</td></tr>
+<tr><td>2021</td><td>5/20</td><td>8 月初，已比合约低约 20%</td><td class="num">约 2.5 个月</td><td>2.5 个月跌 32%；4Q21 合约价转跌</td><td>PC 厂商提前囤货，需求一转弱就消化库存；原厂降价去库存</td></tr>
+<tr><td>2024</td><td>没有明确高点</td><td>上半年起低于合约</td><td class="num">—</td><td>合约价 3Q24 仍涨，4Q24 转跌</td><td>模组厂和渠道 DDR4 库存偏高，三星增加供货</td></tr>
+<tr><td>2026 年 3~4 月</td><td>—</td><td>没有跌破（假信号）</td><td class="num">—</td><td>现货约 −5%，中国渠道 −25~30%；5 月后再创新高</td><td>经销商抛出高位囤的货，合约价照样大涨</td></tr>
+</table>
+<p class="note"><b>历史上现货快速回落，都是库存推动的，而且跌破合约后 1~2 个季度合约价就转跌。</b>现货市场很薄，买盘一消失、库存一抛出来，价格就会迅速下跌。</p>
+
+<!-- ============ 第三部分 ============ -->
+<div class="part">第三部分 · 现在在哪里（2026 年 9 月下旬）</div>
+<h2>7. 当前读数</h2>
+<table>
+<tr><th>维度</th><th>指标</th><th>读数</th><th>状态</th></tr>
+<tr><td rowspan="3">价格涨速（条件一）</td><td>合约价环比</td><td>1Q26 +93~98%（结算）见顶；2Q26 +58~63%、3Q26 +13~18%（预测）；二阶 −35pp、−45pp</td><td><span class="st st-hit"><i>■</i>已出现</span></td></tr>
+<tr><td>合约价同比</td><td>3Q26 约 +435%，是同比的顶；4Q26 不论哪种情景都会降到 +250~330%</td><td><span class="st st-hit"><i>■</i>已出现</span></td></tr>
+<tr><td>合约价水平</td><td>3Q 仍在涨；TrendForce 9/24 付费报告称"上调 4Q26 展望"</td><td><span class="st st-good"><i>●</i>未见顶</span></td></tr>
+<tr><td rowspan="3">现货</td><td>水平</td><td>9/24 DDR4 $46.11、DDR5 $57.67，仍创新高</td><td><span class="st st-good"><i>●</i>未见顶</span></td></tr>
+<tr><td>动量</td><td>4 周平均 +1.34%/周（1 月约 +9%，7 月约 +4%）；9/16 周报称 DDR5 询价放缓、部分报价走软，价格靠原厂报价撑着</td><td><span class="st st-warn"><i>▲</i>预警</span></td></tr>
+<tr><td>对合约的溢价</td><td>DDR4 约 1.8~1.9 倍；DDR5 粗算 1.6~1.8 倍（用模组合约价折算，只看量级）</td><td><span class="st st-good"><i>●</i>未跌破</span></td></tr>
+<tr><td>实现价</td><td>韩国 DRAM 出口单价</td><td>6 月每公斤 −1.7%（9 个月来首跌），8 月前 20 天 −8%；同期出货量 +21.7%，受产品结构影响</td><td><span class="st st-warn"><i>▲</i>预警</span></td></tr>
+<tr><td>库存</td><td>原厂 / 客户</td><td>原厂"极低"；美国云厂商 2Q 因 CPU 短缺局部累积</td><td><span class="st st-warn"><i>▲</i>局部</span></td></tr>
+<tr><td>盈利预期（条件二）</td><td>修正方向</td><td>卖方上调比例 92% → 77%（摩根士丹利 7/24），仍是净上调；9/30 财报后见分晓</td><td><span class="st st-warn"><i>▲</i>松动，未出现</span></td></tr>
+<tr><td rowspan="2">股价</td><td>MU</td><td>6/25 收盘 $1,214 → 7/29 $739（−39%）→ 9/25 $1,082（比高点低 11%）；按波动率调整的回撤 0.56，相当于延长期的中途回调</td><td><span class="st st-na"><i>○</i>中性</span></td></tr>
+<tr><td>同行</td><td>相对 6 月高点：三星 −21%、DRAM ETF −23%、SK 海力士约 −33%（周线）</td><td><span class="st st-warn"><i>▲</i>没有确认</span></td></tr>
+<tr><td rowspan="2">供给</td><td>资本开支</td><td>美光 FY27 超过 $450 亿（FY26 约 $270 亿）；三星加 SK 海力士为 2027~28 年四座新厂投入约 800 万亿韩元</td><td><span class="st st-warn"><i>▲</i>远期压力</span></td></tr>
+<tr><td>供给投降</td><td>没有</td><td><span class="st st-na"><i>○</i>离底部条件很远</span></td></tr>
+</table>
+<p><b>诊断：条件一已经出现，条件二在松动但还没出现；价格水平和现货都没见顶。</b>这是"周期后段、但还没到终局"的读数，和"股价已见顶、马上进入下行"并不一致。</p>
+
+<h2>8. 供需与产能时间表</h2>
+<table>
+<tr><th>时间</th><th>供给端</th><th>供需判断</th></tr>
+<tr><td>2026</td><td>bit 供给约 +16%（IDC），需求增速在 30% 中段；HBM 占 DRAM 晶圆约 22%</td><td>缺货：TrendForce 估计缺 1~2%，高盛估计缺 5%</td></tr>
+<tr><td>2027</td><td>SK 海力士龙仁 Y1 洁净室 2 月启用；美光 ID1 年中出第一片晶圆；长鑫从约 32 万片/月增到约 42 万片/月，主要供应中国国内；TrendForce 预计 2H27 才开始实质爬坡，bit 供给 +24%；HBM 占晶圆比例升到约 30%，继续挤占常规 DRAM</td><td>多数机构认为缺口会扩大</td></tr>
+<tr><td>2028</td><td>三星 P5 量产；美光 ID2 年底投产，广岛新厂 2H28 进设备</td><td><b>分歧最大：</b>摩根大通认为供给增速会超过需求约 3 个百分点；美光说供给"逐步改善"；花旗、三星认为仍然偏紧；SK 海力士认为 2030 年以后仍是需求大于供给</td></tr>
+<tr><td>2029~30</td><td>SK 海力士龙仁 Y2 在 2029 年 6 月启用；美光纽约厂 2030 年以后</td><td>—</td></tr>
+</table>
+<p class="note">需求端：2026 年云厂商资本开支合计超过 $7,000 亿；Rubin 每颗 GPU 配 288GB HBM4，但 Rubin Ultra 可能改用 8-Hi 堆叠，HBM 容量有下修风险；消费电子在被高价挤出需求。</p>
+<p class="note"><b>推论：</b>真正能改变供需的产能要到 2H27~2028 才到位，所以价格水平更可能在 2H27 附近见顶。这比摩根士丹利"4Q26 见顶"的判断晚。用 2018 年来类比：那一轮新产能在年底投产，现货早约 9~12 个月见顶，跌破合约早约 6 个月。</p>
+
+<h2>9. 这一轮的特殊之处：历史模板不能照搬</h2>
+<ul>
+<li><b>振幅大约是历史的 10 倍，波动率是历史的 2 倍。</b>一阶、二阶和回撤都要做标准化再比较，时间节奏也可能比以往快。</li>
+<li><b>股价和现货出现了最大的错位。</b>一种解释是股价抢跑了；另一种解释是现货被长期协议和原厂报价纪律托住，价格信号变慢了。</li>
+<li><b>长期协议和预付款。</b>美光有 16 份战略客户协议，其中 14 份有最低价，合计约 $1,000 亿，期限到 2030 年；预付款约 $220 亿，约覆盖 20% 的 DRAM 出货。这托高了盈利的下限，但也可能封住涨价空间，而且这些协议从没经历过下行周期。</li>
+<li><b>HBM 按年定价，而且正往上重新谈价。</b>2027 年全部订满，媒体报道涨幅在 50% 以上。但 TrendForce 指出，HBM 的盈利能力从 1Q26 起已低于 DDR5 RDIMM。</li>
+<li><b>DDR4 正在停产</b>，让现货和价差都失真。</li>
+<li><b>需求高度集中在云厂商，资本开支又在大幅扩张。</b>一旦 AI 资本开支进入消化期，会是类似 2022 年的外部冲击；而资本开支大增，可能让市场提前 12~18 个月交易 2028 年的供给潮。</li>
+<li><b>韩国同行明显分化。</b>一个可能的解释是盈利修正方向不同：美光 FQ3 大幅超预期，SK 海力士 2Q 营收低于预期。</li>
+</ul>
+
+<!-- ============ 第四部分 ============ -->
+<div class="part">第四部分 · 接下来</div>
+<h2>10. 现货高于合约的状态什么时候结束</h2>
+<table class="nw1">
+<tr><th>情形</th><th>现货见顶</th><th>现货跌破合约</th><th>合约价水平见顶</th><th>依据</th></tr>
+<tr><td><b>基准</b></td><td>4Q26~1Q27</td><td>2Q~3Q27</td><td>2H27</td><td>新产能 2H27~2028 到位；按 2018 年"现货比新产能早 9~12 个月见顶"倒推。1H27 价差主要靠"合约价追、现货横盘"收窄</td></tr>
+<tr><td>快速</td><td>随时</td><td>最早 1Q27</td><td>4Q26~1Q27</td><td>需求冲击（AI 资本开支消化、囤货反转、云厂商消化库存），按 2021 年节奏，现货见顶约 2.5 个月后就跌破合约</td></tr>
+<tr><td>慢速</td><td>2027 年以后</td><td>2028 年以后</td><td>2028 年以后</td><td>AI 需求吸收全部新增供给（花旗、SK 海力士的观点）</td></tr>
+</table>
+<p class="note">这次可能比历史慢，原因有三：原厂库存极低，没有抛货的动力；长期协议把大部分产能锁住，流到现货市场的货本来就少；新产能来得晚。但现货市场很薄，4 月那次已经说明，经销商一抛货，渠道价格一周就能跌 25%。</p>
+
+<h2>11. 三条路径</h2>
+<table>
+<tr><th>路径</th><th class="num">主观权重</th><th>价格前提</th><th>未来 1~3 个月会看到什么</th><th>股价形态</th></tr>
+<tr><td><b>拉长型多顶</b>（像 2016–18）</td><td class="num">约 45%</td><td>基准：合约价小幅上涨到 2027 年，价格水平 2H27 见顶</td><td>9/30 后一致预期继续上调（条件二没出现）；4Q26 环比在中高个位数以上；现货溢价维持</td><td>高位宽幅震荡，按本轮波动率会有多次 30~40% 的回调，新高幅度越来越小；最终顶大约在 1H27 到 2027 年年中</td></tr>
+<tr><td><b>简单双顶</b>（像 2021–22）</td><td class="num">约 30%</td><td>价格水平在 4Q26~1H27 见顶，或者市场提前交易 2028 年供给潮</td><td>4Q26 落在 0~+15.5%（水下变浅）；数字不错但一致预期不再上调，股价冲高后回落；同行不跟</td><td>4Q26 前后以微弱新高（约 +2%）形成二顶，然后下跌；见底要等供给投降</td></tr>
+<tr><td><b>单顶</b>（像 2024）</td><td class="num">约 25%</td><td>快速情形：需求冲击让现货马上见顶</td><td>9/30 指引的售价转平或毛利率回落；4Q26 环比 ≤ 0；DDR5 现货连续下跌</td><td>反弹失败，高点一次比一次低</td></tr>
+</table>
+<figure><img src="framework_4_second_derivative.png" alt="合约价二阶导的水上水下与 4Q26 情景"><figcaption>图 7｜合约价二阶导。最右侧三个虚线框是 4Q26 的三种情景，分别假设环比 +18%、+8%、−3%，只是示意，不是预测。</figcaption></figure>
+<table>
+<tr><th>4Q26 常规 DRAM 合约价环比</th><th class="num">4Q26 二阶</th><th>含义</th><th>对应路径</th></tr>
+<tr><td>≥ +15.5%（3Q 中值）</td><td class="num">≥ 0，回到水上</td><td>涨速重新加快</td><td>支持拉长型，甚至突破前高</td></tr>
+<tr><td>0 到 +15.5%</td><td class="num">−15.5 到 0pp</td><td>水下变浅，也就是历史上二顶出现的状态</td><td><b>拉长型和双顶都有可能，要看条件二</b>：盈利预期继续上调就是拉长型中的一次冲高，不再上调就是二顶</td></tr>
+<tr><td>≤ 0</td><td class="num">≤ −15.5pp</td><td>一阶也转到水下</td><td>单顶，或者提前进入下行</td></tr>
+</table>
+<h3>未来 90 天的判断规则</h3>
+<table>
+<tr><th>信号</th><th>偏拉长型</th><th>偏双顶</th><th>偏单顶</th></tr>
+<tr><td><b>9/30 之后的一致预期</b>（最重要）</td><td>上调 FY27、FY28 EPS</td><td>数字好，但预期不再上调，股价冲高回落</td><td>下调</td></tr>
+<tr><td>美光指引</td><td>DRAM 售价环比十几个百分点以上，毛利率继续上升</td><td>售价环比个位数到十几个百分点，毛利率持平</td><td>售价转平，毛利率回落</td></tr>
+<tr><td>4Q26 合约价环比</td><td>≥ +15.5% 或中高个位数以上</td><td>0~+15.5%</td><td>≤ 0</td></tr>
+<tr><td>DDR5 现货</td><td>动量回升，溢价维持</td><td>横盘，溢价慢慢收窄</td><td>连续 3~4 周下跌</td></tr>
+<tr><td>同行</td><td>SK 海力士、三星收复 6 月高点</td><td>MU 接近前高，同行仍低 20% 以上</td><td>MU 也跟着走弱</td></tr>
+<tr><td>韩国出口单价</td><td>回升</td><td>上下波动</td><td>连续下跌</td></tr>
+</table>
+<p class="note"><b>历史幅度作为参考：</b>二顶之后跌了 45~54%，单顶之后跌了 57%，都跌破了首顶后的第一个低点（本轮是 7/29 的 $739）。从首顶到股价底用了 9~18 个月。本轮有长期协议和 HBM 重新定价托底，回撤可能更浅，但这一点没有经历过检验。现在资本开支还在扩张，离供给投降很远，所以一旦转入下行，过程可能比较长。</p>
+
+<h2>12. 跟踪清单</h2>
+<table>
+<tr><th>时间</th><th>事件</th><th>重点看什么</th></tr>
+<tr><td><b>9/30 美股盘后</b></td><td>美光 FQ4 业绩和 FQ1'27 指引</td><td>一致预期：营收 $506~512 亿、EPS $31.2~31.6。重点看 DRAM 售价环比指引、毛利率趋势、FY27 资本开支、长期协议和预付款、HBM4 在 2027 年的定价；<b>以及之后几天一致预期怎么改</b></td></tr>
+<tr><td>10/1 前后</td><td>韩国 9 月进出口</td><td>半导体出口金额、DRAM 单价</td></tr>
+<tr><td>10 月上旬</td><td>三星 3Q26 初步业绩（惯例时间）</td><td>存储利润是否继续环比增长</td></tr>
+<tr><td>10/10 前</td><td>南亚科、华邦 9 月营收</td><td>环比能否回升（8 月只有 +1.9%）</td></tr>
+<tr><td>10~11 月</td><td>4Q26 合约价结算</td><td>和 +15.5% 比较</td></tr>
+<tr><td>10 月下旬</td><td>SK 海力士 3Q 业绩；云厂商 3Q 财报</td><td>SK 海力士的盈利修正方向；云厂商 2027 年资本开支的初步口径</td></tr>
+<tr><td>4Q26</td><td>2027 年 HBM4 合约定价</td><td>涨幅是否在 50% 以上；三星、美光在 Rubin 上的份额</td></tr>
+</table>
+<table>
+<tr><th>频率</th><th>要做的事</th><th>数据源</th></tr>
+<tr><td>每周</td><td>DDR5 和 DDR4 现货水平、周涨跌、4 周动量；周报措辞</td><td>TrendForce 现货页（免费）、周三周报；中国渠道价格</td></tr>
+<tr><td>每 10 天</td><td>韩国出口：半导体金额、DRAM 每公斤单价、推算出货量</td><td>韩国关税厅、TRASS，媒体转述</td></tr>
+<tr><td>每月</td><td>合约价环比；现货 ÷ 合约 − 1；台湾存储厂和模组厂月营收</td><td>TrendForce 合约页；南亚科、华邦、威刚</td></tr>
+<tr><td>每季</td><td>TrendForce 预测修正的方向（比数值更重要）；原厂售价和 bit 指引、毛利率、库存、资本开支、长期协议；一致预期修正</td><td>TrendForce、美光、SK 海力士、三星财报；卖方</td></tr>
+</table>
+<p class="note">重跑图表：work/build_framework_charts.py（图 1、3、4）、work/build_second_derivative.py（图 2、7）、work/build_double_top.py（图 5）、work/build_top2_d2.py（图 6）。</p>
+
+<h2>13. 局限与数据缺口</h2>
+<ul class="note">
+<li>2Q26、3Q26 的合约价涨幅是 TrendForce 的预测，还不是结算值；4Q26 的数字在付费报告里。四象限统计只有 15 个季度，多数用预测值。</li>
+<li>2017 年部分用 PC DRAM 模组口径，2018 年起用主流 DRAM 平均；1Q21 只有"持平到小涨"的描述，取约 +2.5%；2016–17 年的季度资料少，那一轮拐点的可信度较低。</li>
+<li>"两个条件"的框架还没有用一致预期的历史快照做过检验；这需要 Bloomberg、FactSet 或 LSEG 的历史数据。</li>
+<li>HBM 价格、HBM 现货、Rubin 份额大多来自单一媒体，彼此有矛盾；DDR5 合约价是用模组价粗略折算的。</li>
+<li>韩国出口单价按重量计算，受产品结构影响。SK 海力士的 Yahoo 日线在 7/30 前后有异常跳点，改用了周线。</li>
+<li>2018 年 EPS 和部分历史 P/B 来自已有知识或搜索摘要，没有逐条复核。复权股价来自 Yahoo Finance，已和 IBKR 日线交叉核对。</li>
+<li>路径权重是主观判断，会随 9/30 和 4Q26 的数据更新。</li>
+</ul>
+
+<h2>主要来源</h2>
+<ul class="src">
+<li>价格（当前）：TrendForce 现货页 https://www.trendforce.com/price/dram/dram_spot ；合约价页 https://www.trendforce.cn/price/dram/dram_contract ；现货周报 9/2 https://www.trendforce.com/news/2026/09/02/insights-memory-spot-price-update-ddr5-ddr4-demand-weakens-but-firm-supplier-quotes-support-elevated-prices/ ；9/16 https://www.trendforce.com/news/2026/09/16/insights-memory-spot-price-update-dram-spot-cools-as-ddr5-inquiries-slow-2gx8-ddr4-prices-retreat</li>
+<li>合约价季度：1Q26 结算 https://www.trendforce.com/presscenter/news/20260601-13070.html ；2Q26 https://www.trendforce.com/presscenter/news/20260331-12995.html ；3Q26 https://www.trendforce.com/presscenter/news/20260703-13134.html ；服务器与长期协议 https://www.trendforce.com/presscenter/news/20260709-13140.html ；4Q26 预览 https://www.trendforce.com/research/download/RP260924PL ；逐季历史见 work/dram_contract_qoq_history.csv</li>
+<li>HBM：年度定价、盈利能力低于 DDR5 RDIMM https://www.trendforce.com/presscenter/news/20260602-13074.html ；2027 年涨幅报道 https://www.trendforce.com/news/2026/08/25/news-nvidias-reported-15-server-hike-boosts-samsung-sk-hynix-with-hbm-prices-potentially-up-50-in-2027/ ；每 Gb 价格 https://en.sedaily.com/finance/2026/07/12/hbm4-prices-to-double-next-year-as-samsung-sk-hynix-keep ；HBM 现货 https://en.sedaily.com/finance/2026/08/31/spot-hbm-prices-hit-5-times-contract-levels ；Rubin Ultra https://www.trendforce.com/presscenter/news/20260804-13166.html</li>
+<li>供需与产能：https://www.trendforce.com/presscenter/news/20260730-13158.html ；HBM 晶圆占比 https://www.trendforce.com/research/download/RP260728GY ；HBM 耗用 3 倍晶圆 https://mlq.ai/news/micron-says-hbm-uses-about-three-times-the-wafer-supply-of-ddr5-and-the-gap-is-widening/ ；2028 年可能过剩 https://www.digitimes.com/news/a20260720VL223/2028-dram-hbm-demand-sk-hynix.html ；SK 海力士判断 https://www.tweaktown.com/news/109336/sk-hynix-internal-analysis-warns-dram-supply-growth-will-be-tight-until-2028/index.html ；龙仁投资 https://news.skhynix.com/en/fab-facility-investment-2026/ ；Blocks &amp; Files https://www.blocksandfiles.com/ai-ml/2026/05/11/dram-and-gloom-glut-cyclicality/5237714 ；美光广岛 https://www.trendforce.com/news/2026/07/06/news-micron-breaks-ground-on-hiroshima-fab-expansion-scaling-1%CE%B3-dram-and-hbm-output-as-equipment-set-for-2h28/ ；长鑫 https://www.trendforce.com/news/2026/09/24/news-cxmt-ymtc-ramp-memory-capacity-but-chinas-ai-cloud-boom-could-soak-up-new-supply-through-2027/ 、https://newsletter.semianalysis.com/p/chinas-cxmt-is-set-to-challenge-dram</li>
+<li>公司：美光 FQ3 https://investors.micron.com/news/press-release/2026/Micron-Technology-Inc--Reports-Record-Results-for-the-Third-Quarter-of-Fiscal-2026/default.aspx ；业绩会讲稿 https://investors.micron.com/static-files/631b1a32-5537-46ae-8f40-82e42fc79dfe ；FQ4 日期 https://investors.micron.com/news/press-release/2026/Micron-Technology-to-Report-Fiscal-Fourth-Quarter-Results-on-September-30-2026/default.aspx ；一致预期 https://news.alphastreet.com/micron-technology-mu-q4-2026-preview-eps-est-31-56-reports-september-30/ ；SK 海力士 2Q https://www.cnbc.com/2026/07/29/sk-hynix-earnings-profit-revenue-hbm-memory.html ；三星 2Q https://news.samsung.com/global/samsung-electronics-announces-second-quarter-2026-results ；季度 EPS https://stockanalysis.com/stocks/mu/financials/?period=quarterly ；估值 https://stockanalysis.com/stocks/mu/statistics/</li>
+<li>高频与需求：韩国 8 月出口 https://english.motir.go.kr/eng/article/EATCLdfa319ada/2719/view ；9 月 1–20 日 https://www.koreatimes.co.kr/economy/20260921/exports-up-78-in-first-20-days-of-sept-on-robust-chip-shipments ；DRAM 每公斤单价 https://www.trendforce.com/news/2026/08/26/news-south-koreas-dram-prices-reportedly-soar-12-5-fold-in-3-years-outpacing-gold ；南亚科 https://news.cnyes.com/news/id/6595428 ；云厂商资本开支 https://www.tmtfinance.com/intel/2026-hyperscaler-capex-tops-us700bn-analysis ；摩根士丹利 7/24 https://finance.biggo.com/news/29d1ad5a-09f4-4a2e-820a-39003cf9f046 ；2026 年 4 月现货回调 https://www.tomshardware.com/tech-industry/ddr4-spot-prices-fall-for-first-time-in-nearly-a-year-as-chinese-channel-inventory-clears</li>
+<li>历史周期：2017 年 https://www.theregister.com/2017/05/18/dram_bonanza_for_top_three_suppliers/ 、https://www.dramexchange.com/WeeklyResearch/Post/2/4828.html ；2018 年 https://press.trendforce.com/press/20180514-3099.html 、https://www.trendforce.com/presscenter/news/20180813-10036.html 、https://www.trendforce.com/presscenter/news/20180926-10055.html 、https://www.trendforce.com/presscenter/news/20181204-10078.html ；2019 年 https://www.trendforce.com/presscenter/news/20190121-10096.html 、https://www.trendforce.com/presscenter/news/20190219-10103.html 、https://www.trendforce.com/presscenter/news/20190528-10140.html ；2021~22 年 https://www.trendforce.com/presscenter/news/20201210-10590.html 、https://www.techpowerup.com/281231/dram-prices-projected-to-rise-by-18-23-qoq-in-2q21-owing-to-peak-season-demand-says-trendforce 、https://www.trendforce.com/presscenter/news/20210713-10858.html 、https://www.trendforce.com/presscenter/news/20210810-10890.html 、https://www.trendforce.com/presscenter/news/20210922-10947.html 、https://www.trendforce.com/presscenter/news/20211213-11050.html 、https://www.trendforce.com/presscenter/news/20220328-11175.html 、https://www.trendforce.com/presscenter/news/20220922-11391.html 、https://www.trendforce.com/presscenter/news/20230109-11533.html ；2024 年 https://www.trendforce.com/news/2024/05/22/insights-memory-spot-price-update-dram-price-down-again-due-to-chip-supply-increase-led-by-samsung/ 、https://www.trendforce.com/news/2024/07/17/insights-memory-spot-price-update-dram-prices-continue-to-rise-as-samsung-supports-the-momentum/ ；美光减产 https://blocksandfiles.com/2018/12/19/microns-quarterly-revenue-growth-terminates/ 、https://siliconangle.com/2022/09/29/micron-slash-spending-new-chipmaking-gear-50-counter-unprecedented-oversupply-problems/ 、https://www.streetinsider.com/Corporate+News/Micron+Technology+(MU)+to+Cut+DRAM+and+NAND+Wafer+Starts+by+20%25/20861249.html ；拐点明细见 work/memory_cycle_turning_points.csv</li>
+</ul>
+<p class="note">本报告是市场研究材料，不构成投资建议。股价为价格回报，不含股息；各数据口径以原始来源为准。</p>
+</main>
+</body>
+</html>
